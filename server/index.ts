@@ -9,8 +9,13 @@ import path from "path";
 
 const app = express();
 
-// Force HTTPS redirect in production (must be first)
-app.use(forceHTTPS);
+// Indica a Express che è dietro un proxy (Railway) -> req.secure funziona
+app.set("trust proxy", 1);
+
+// Force HTTPS solo in produzione
+if (app.get("env") === "production") {
+ app.use(forceHTTPS);
+}
 
 // Apply secure CORS configuration
 app.use(cors(getCorsConfig()));
@@ -64,7 +69,7 @@ app.use('/uploads', express.static(path.join(process.cwd(), 'uploads')));
 
 app.use((req, res, next) => {
   const start = Date.now();
-  const path = req.path;
+  const reqPath = req.path;
   let capturedJsonResponse: Record<string, any> | undefined = undefined;
 
   const originalResJson = res.json;
@@ -75,8 +80,8 @@ app.use((req, res, next) => {
 
   res.on("finish", () => {
     const duration = Date.now() - start;
-    if (path.startsWith("/api")) {
-      let logLine = `${req.method} ${path} ${res.statusCode} in ${duration}ms`;
+    if (reqPath.startsWith("/api")) {
+      let logLine = `${req.method} ${reqPath} ${res.statusCode} in ${duration}ms`;
       if (capturedJsonResponse) {
         logLine += ` :: ${JSON.stringify(capturedJsonResponse)}`;
       }
@@ -100,7 +105,11 @@ app.use((req, res, next) => {
     const message = err.message || "Internal Server Error";
 
     res.status(status).json({ message });
-    throw err;
+    if (app.get("env") === "development") {
+         // in dev puoi voler vedere lo stack
+        console.error(err);
+       }
+     // in produzione non rilanciare per non killare il processo
   });
 
   // importantly only setup vite in development and after
@@ -112,15 +121,18 @@ app.use((req, res, next) => {
     serveStatic(app);
   }
 
-  // ALWAYS serve the app on port 5000
-  // this serves both the API and the client.
-  // It is the only port that is not firewalled.
-  const port = 5000;
-  server.listen({
+ // Usa la porta assegnata da Railway o 3000 in locale
+const port = Number(process.env.PORT) || 3000;
+
+server.listen(
+  {
     port,
     host: "0.0.0.0",
     reusePort: true,
-  }, () => {
-    log(`serving on port ${port}`);
-  });
+  },
+  () => {
+    log(`🚀 Server online su porta ${port}`);
+  }
+);
+
 })();
