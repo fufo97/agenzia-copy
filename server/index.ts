@@ -120,26 +120,11 @@ app.use((req, res, next) => {
 });
 
 // ----------------------------------------------------------------------------
-// Bootstrap asincrono: routes → vite/dev o static/prod → listen
+// Bootstrap asincrono: routes → vite/dev o static/prod → listen → ERROR HANDLER
 // ----------------------------------------------------------------------------
 (async () => {
   // Registra tutte le route dell’app e ottieni l’istanza di http.Server
   const server = await registerRoutes(app);
-
-  // Error handler (sempre DOPO le route)
-  app.use((err: unknown, _req: Request, res: Response, _next: NextFunction) => {
-    const anyErr = err as { status?: number; statusCode?: number; message?: string };
-    const status = anyErr?.status ?? anyErr?.statusCode ?? 500;
-    const message = anyErr?.message ?? "Internal Server Error";
-    res.status(status).json({ message });
-
-    if (!isProd) {
-      // in dev stampiamo lo stack per debug
-      // eslint-disable-next-line no-console
-      console.error(err);
-    }
-    // in prod non rilanciamo per non killare il processo
-  });
 
   // Importante: Vite SOLO in dev, e DOPO le altre route
   if (!isProd) {
@@ -148,6 +133,27 @@ app.use((req, res, next) => {
     // In produzione serviamo i file statici buildati
     serveStatic(app);
   }
+
+  // === Error handler UNICO e per ultimo (dopo rotte e statici) ===
+  app.use((err: any, _req: Request, res: Response, _next: NextFunction) => {
+    const status = err?.status || err?.statusCode || 500;
+
+    // se la risposta è già partita, non inviare di nuovo
+    if (res.headersSent) {
+      console.error("[error after headersSent]", status, err?.message);
+      return;
+    }
+
+    if (status >= 500) {
+      console.error("[server error]", status, err?.stack || err);
+    } else {
+      console.warn("[client error]", status, err?.message);
+    }
+
+    res.status(status).json({
+      message: err?.message || "Internal Server Error",
+    });
+  });
 
   // Porta Railway (se non presente, 3000 per locale)
   const PORT = process.env.PORT ? Number(process.env.PORT) : 3000;
