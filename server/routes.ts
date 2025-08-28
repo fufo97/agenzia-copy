@@ -27,9 +27,27 @@ import {
 import { z } from "zod";
 import crypto from "crypto";
 import multer from "multer";
-import path from "path";
+import path from "node:path";
 import fs from "fs";
 import yauzl from "yauzl";
+
+function resolveOr(label: string, p: string | undefined | null, fallback: string) {
+  if (p == null || p === "") {
+    const out = path.resolve(fallback);
+    console.warn(`[paths] '${label}' non impostato → fallback: ${out}`);
+    return out;
+  }
+  return path.resolve(p);
+}
+
+const UPLOADS_DIR = process.env.UPLOADS_DIR ?? path.join(process.cwd(), "uploads");
+const EXTRACT_DIR = process.env.EXTRACT_DIR ?? path.join(UPLOADS_DIR, "extracted");
+
+// Crea le cartelle se non esistono (evita ENOENT in scrittura/lettura)
+for (const dir of [UPLOADS_DIR, EXTRACT_DIR]) {
+  if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
+}
+
 
 // MailerLite integration
 const MAILERLITE_API_TOKEN = process.env.MAILERLITE_API_TOKEN;
@@ -342,8 +360,9 @@ async function extractZipFile(zipPath: string, extractDir: string): Promise<void
           const safePath = path.join(extractDir, normalizedPath);
           
           // Double-check that resolved path is within extraction directory
-          const resolvedPath = path.resolve(safePath);
-          const resolvedExtractDir = path.resolve(extractDir);
+
+           const resolvedPath = resolveOr("safePath", safePath, UPLOADS_DIR);
+           const resolvedExtractDir = resolveOr("extractDir", extractDir, EXTRACT_DIR);
           
           if (!resolvedPath.startsWith(resolvedExtractDir + path.sep) && resolvedPath !== resolvedExtractDir) {
             return reject(new Error(`Path traversal blocked: ${entry.fileName} -> ${resolvedPath}`));
