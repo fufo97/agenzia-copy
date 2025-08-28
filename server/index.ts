@@ -1,11 +1,13 @@
 // server/index.ts
 
 import express, { type Request, type Response, type NextFunction } from "express";
+import compression from "compression";
 import rateLimit from "express-rate-limit";
 import cors from "cors";
 import path from "node:path";
+
 import { registerRoutes } from "./routes";
-import { setupVite, serveStatic, log } from "./vite";
+import { setupVite, log } from "./vite"; // SOLO in dev
 import { getCorsConfig, addSecurityHeaders } from "./corsConfig";
 import {
   forceHTTPS,
@@ -25,14 +27,42 @@ app.set("trust proxy", 1);
 app.disable("x-powered-by");
 
 // Ambiente
-const isProd = app.get("env") === "production";
+const isProd = process.env.NODE_ENV === "production";
+
+// Compressione sempre attiva
+app.use(compression());
+
+// Directory di build (in produzione __dirname === .../dist)
+const distDir = __dirname;
+const publicDir = path.join(distDir, "public");
+
+// ----------------------------------------------------------------------------
+// 1) **ASSET STATICI PRIMA DI TUTTO** (SOLO PRODUZIONE)
+// ----------------------------------------------------------------------------
+if (isProd) {
+  // /assets con cache lunga + immutable
+  app.use(
+    "/assets",
+    express.static(path.join(publicDir, "assets"), {
+      immutable: true,
+      maxAge: "1y",
+    })
+  );
+
+  // static generico per tutto il resto in /public (favicon, robots.txt, immagini…)
+  app.use(express.static(publicDir));
+}
+
+// ----------------------------------------------------------------------------
+// 2) Sicurezza/CORS, parser, rate limit **dopo** gli statici
+// ----------------------------------------------------------------------------
 
 // Forza HTTPS solo in produzione
 if (isProd) {
   app.use(forceHTTPS);
 }
 
-// CORS sicuro
+// CORS (si applica alle API; gli asset statici sono già usciti)
 app.use(cors(getCorsConfig()));
 
 // Security headers “base”
@@ -49,10 +79,8 @@ app.use(express.json());
 app.use(express.urlencoded({ extended: false }));
 
 // ----------------------------------------------------------------------------
-/** Rate limiting */
+// 3) Rate limiting (scoped alle API)
 // ----------------------------------------------------------------------------
-
-// Generale per tutte le API
 const generalLimiter = rateLimit({
   windowMs: 15 * 60 * 1000, // 15 minuti
   max: 100,
@@ -64,7 +92,6 @@ const generalLimiter = rateLimit({
   legacyHeaders: false,
 });
 
-// Più stretto per login admin (anti brute force)
 const adminLoginLimiter = rateLimit({
   windowMs: 15 * 60 * 1000,
   max: 5,
@@ -77,17 +104,16 @@ const adminLoginLimiter = rateLimit({
   skipSuccessfulRequests: true,
 });
 
-// Applica i limiter
 app.use("/api", generalLimiter);
 app.use("/api/admin/login", adminLoginLimiter);
 
 // ----------------------------------------------------------------------------
-// Statiche upload
+// 4) Statiche upload (fuori da /public)
 // ----------------------------------------------------------------------------
 app.use("/uploads", express.static(path.join(process.cwd(), "uploads")));
 
 // ----------------------------------------------------------------------------
-// Logging minimale per le API (metodo, path, status, durata)
+// 5) Logging minimale per le API
 // ----------------------------------------------------------------------------
 app.use((req, res, next) => {
   const start = Date.now();
@@ -120,18 +146,20 @@ app.use((req, res, next) => {
 });
 
 // ----------------------------------------------------------------------------
-// Bootstrap asincrono: routes → vite/dev o static/prod → listen → ERROR HANDLER
+// 6) Bootstrap asincrono: routes → (vite in dev) → catch-all prod → listen
 // ----------------------------------------------------------------------------
 (async () => {
-  // Registra tutte le route dell’app e ottieni l’istanza di http.Server
+  // Registra le route dell’app e ottieni l’istanza di http.Server
   const server = await registerRoutes(app);
 
-  // Importante: Vite SOLO in dev, e DOPO le altre route
+  // Dev middleware Vite SOLO in sviluppo
   if (!isProd) {
     await setupVite(app, server);
   } else {
-    // In produzione serviamo i file statici buildati
-    serveStatic(app);
+    // Catch-all SPA in produzione: tutte le route non/API servono l'index.html
+    app.get("*", (_req, res) => {
+      res.sendFile(path.join(publicDir, "index.html"));
+    });
   }
 
   // === Error handler UNICO e per ultimo (dopo rotte e statici) ===
