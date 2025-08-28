@@ -1,12 +1,10 @@
 // server/vite.ts
 
-import express, { type Express } from "express";
-import fs from "node:fs";
-import { promises as fsp } from "node:fs";
-import path from "node:path";
-import { fileURLToPath } from "node:url";
+import type { Express } from "express";
 import type { Server } from "node:http";
-import { nanoid } from "nanoid";
+import { fileURLToPath } from "node:url";
+import path from "node:path";
+import { promises as fsp } from "node:fs";
 
 /** ESM compat per __dirname */
 const __filename = fileURLToPath(import.meta.url);
@@ -25,17 +23,21 @@ export function log(message: string, source = "express") {
 }
 
 /**
- * DEV ONLY: avvia Vite in middleware mode.
- * Importiamo 'vite' e 'vite.config' **solo qui**, dinamicamente,
- * così in produzione non vengono mai valutati.
+ * Avvia il Vite Dev Server **solo** in sviluppo.
+ * In produzione è un NO-OP (non monta nessun middleware).
  */
 export async function setupVite(app: Express, server: Server) {
-  const { createServer: createViteServer, createLogger } = await import("vite");
-  const viteLogger = createLogger();
+  // Produzione: NON avviare Vite/SSR, lascia che Express serva i file buildati.
+  if (process.env.NODE_ENV === "production") return;
 
-  // Import dinamico del config (solo in dev)
+  // Import dinamico: questi moduli non vengono mai valutati in produzione.
+  const { createServer: createViteServer, createLogger } = await import("vite");
+
+  // Importa il config del progetto senza usare configFile (lo passiamo inline)
   const viteConfigMod: any = await import("../vite.config");
   const viteConfig = viteConfigMod.default ?? viteConfigMod;
+
+  const viteLogger = createLogger();
 
   const serverOptions = {
     middlewareMode: true as const,
@@ -45,78 +47,27 @@ export async function setupVite(app: Express, server: Server) {
 
   const vite = await createViteServer({
     ...viteConfig,
-    configFile: false,
-    customLogger: {
-      ...viteLogger,
-      error: (msg, options) => {
-        viteLogger.error(msg, options);
-        process.exit(1);
-      },
-    },
+    configFile: false,        // usiamo l'oggetto importato sopra
     server: serverOptions,
     appType: "custom",
+    customLogger: viteLogger,
   });
 
+  // Middlewares dev di Vite (HMR, trasformazioni, asset non buildati)
   app.use(vite.middlewares);
 
+  // Servizio di index.html in DEV: trasformiamo il template con Vite
   app.use("*", async (req, res, next) => {
     try {
       const url = req.originalUrl;
       const clientTemplate = path.resolve(__dirname, "..", "client", "index.html");
-      let template = await fsp.readFile(clientTemplate, "utf-8");
-      template = template.replace(
-        `src="/src/main.tsx"`,
-        `src="/src/main.tsx?v=${nanoid()}"`
-      );
+      const template = await fsp.readFile(clientTemplate, "utf-8");
       const html = await vite.transformIndexHtml(url, template);
       res.status(200).set({ "Content-Type": "text/html" }).end(html);
     } catch (e) {
+      // Migliora lo stack in dev e passa all'error handler
       vite.ssrFixStacktrace(e as Error);
       next(e);
     }
-  });
-}
-
-/**
- * PROD: serve i file statici buildati del client.
- * Autodetect dei path più comuni (+ supporto a FRONTEND_DIR se impostata).
- */
-export function serveStatic(app: Express) {
-  // Se è definita un’override via env, provala per prima
-  const candidates = [
-    process.env.FRONTEND_DIR ? path.resolve(process.env.FRONTEND_DIR) : "",
-    path.resolve(__dirname, "public"),                     // es: dist/public accanto al bundle server
-    path.resolve(process.cwd(), "dist", "public"),         // /app/dist/public
-    path.resolve(process.cwd(), "public"),                 // /app/public
-    path.resolve(process.cwd(), "client", "dist"),         // /app/client/dist
-  ].filter(Boolean) as string[];
-
-  const distPath = candidates.find((p) =>
-    fs.existsSync(path.join(p, "index.html"))
-  );
-
-  if (!distPath) {
-    throw new Error(
-      `Could not find built client. Tried:\n` +
-        candidates.map((p) => ` - ${p}`).join("\n")
-    );
-  }
-
-  // ✅ monta /assets dalla sottocartella corretta
-  app.use(
-    "/assets",
-    express.static(path.join(distPath, "assets"), {
-      immutable: true,
-      maxAge: "1y",
-      fallthrough: false, // se non esiste -> 404, non passa all'error handler
-    })
-  );
-
-  // Servi anche il resto (favicon, immagini accanto a index.html)
-  app.use(express.static(distPath, { fallthrough: true }));
-
-  // Fallback SPA → index.html
-  app.get("*", (_req, res) => {
-    res.sendFile(path.join(distPath, "index.html"));
   });
 }
