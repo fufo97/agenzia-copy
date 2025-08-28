@@ -102,17 +102,17 @@ export function serveStatic(app: Express) {
     );
   }
 
-  // Servi gli asset con cache aggressiva (hash nel nome file)
+  // ✅ monta /assets dalla sottocartella corretta
   app.use(
     "/assets",
-    express.static(distPath, {
+    express.static(path.join(distPath, "assets"), {
       immutable: true,
       maxAge: "1y",
-      fallthrough: true,
+      fallthrough: false, // se non esiste -> 404, non passa all'error handler
     })
   );
 
-  // Servi anche le altre risorse statiche (favicon, immagini, ecc.)
+  // Servi anche il resto (favicon, immagini accanto a index.html)
   app.use(express.static(distPath, { fallthrough: true }));
 
   // Fallback SPA → index.html
