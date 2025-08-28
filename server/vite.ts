@@ -78,30 +78,45 @@ export async function setupVite(app: Express, server: Server) {
 }
 
 /**
- * PROD: serve i file statici buildati (dist/public).
- * Non tocca né importa Vite né vite.config.
+ * PROD: serve i file statici buildati del client.
+ * Autodetect dei path più comuni (+ supporto a FRONTEND_DIR se impostata).
  */
 export function serveStatic(app: Express) {
-  const distPath = process.env.FRONTEND_DIR
-    ? path.resolve(process.env.FRONTEND_DIR)
-    : path.join(__dirname, "public"); // in prod ≈ /app/dist/public
+  // Se è definita un’override via env, provala per prima
+  const candidates = [
+    process.env.FRONTEND_DIR ? path.resolve(process.env.FRONTEND_DIR) : "",
+    path.resolve(__dirname, "public"),                     // es: dist/public accanto al bundle server
+    path.resolve(process.cwd(), "dist", "public"),         // /app/dist/public
+    path.resolve(process.cwd(), "public"),                 // /app/public
+    path.resolve(process.cwd(), "client", "dist"),         // /app/client/dist
+  ].filter(Boolean) as string[];
 
-  if (!fs.existsSync(distPath)) {
+  const distPath = candidates.find((p) =>
+    fs.existsSync(path.join(p, "index.html"))
+  );
+
+  if (!distPath) {
     throw new Error(
-      `Build directory not found: ${distPath}. Esegui la build del client prima del deploy.`
+      `Could not find built client. Tried:\n` +
+        candidates.map((p) => ` - ${p}`).join("\n")
     );
   }
 
+  // Servi gli asset con cache aggressiva (hash nel nome file)
   app.use(
+    "/assets",
     express.static(distPath, {
+      immutable: true,
       maxAge: "1y",
-      etag: true,
-      redirect: false,
+      fallthrough: true,
     })
   );
 
-  // SPA fallback
+  // Servi anche le altre risorse statiche (favicon, immagini, ecc.)
+  app.use(express.static(distPath, { fallthrough: true }));
+
+  // Fallback SPA → index.html
   app.get("*", (_req, res) => {
-    res.sendFile(path.resolve(distPath, "index.html"));
+    res.sendFile(path.join(distPath, "index.html"));
   });
 }

@@ -5,12 +5,17 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 
 const __filename = fileURLToPath(import.meta.url);
-const __dirname  = path.dirname(__filename);
+const __dirname = path.dirname(__filename);
 
 export default defineConfig({
-  plugins: [
-    react(), // Fast Refresh e trasformazioni React
-  ],
+  // assicura che gli asset siano richiesti come /assets/... (niente path relativi)
+  base: "/",
+  plugins: [react()],
+
+  // il codice sorgente vive in client/
+  root: path.resolve(__dirname, "client"),
+
+  // alias utili lato client
   resolve: {
     alias: {
       "@": path.resolve(__dirname, "client", "src"),
@@ -18,11 +23,15 @@ export default defineConfig({
       "@assets": path.resolve(__dirname, "attached_assets"),
     },
   },
-  root: path.resolve(__dirname, "client"),
+
   build: {
+    // output finale dove il server andrà a servire gli asset
     outDir: path.resolve(__dirname, "dist/public"),
+    assetsDir: "assets",
     emptyOutDir: true,
   },
+
+  // piccola hardening in dev
   server: {
     fs: {
       strict: true,
